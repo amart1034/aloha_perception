@@ -218,3 +218,16 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ROS Build Outputs
+build/
+install/
+log/
+
+# Model Weights and Recorded Data
+.pt
+.onnx
+.bag
+.db3
+.mcap
+
