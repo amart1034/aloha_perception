@@ -7,7 +7,9 @@ the image frame_id. scene_graph_node converts them to base_link through TF
 (base_link -> global_camera_color_optical_frame, the easy_handeye2 result).
 """
 import os
+from jax import exc
 import rclpy, threading, json
+import message_filters
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.node import Node
 from sensor_msgs.msg import Image, CameraInfo
@@ -54,19 +56,28 @@ class RealSenseDetection(Node):
 
 
         # Subscriptions — use aligned depth (perfect alignment with RGB)
-        self.create_subscription(
+        
+        self.rgb_sub = message_filters.Subscriber(
+            self,
             Image,
             self.get_parameter('rgb_topic').value,
-            self._rgb_cb,
-            qos_profile_sensor_data
+            qos_profile=qos_profile_sensor_data
         )
 
-        self.create_subscription(
+        self.depth_sub = message_filters.Subscriber(
+            self,
             Image,
             self.get_parameter('depth_topic').value,
-            self._depth_cb,
-            qos_profile_sensor_data
+            qos_profile=qos_profile_sensor_data
         )
+
+        self.image_sync = message_filters.ApproximateTimeSynchronizer(
+            [self.rgb_sub, self.depth_sub],
+            queue_size=5,
+            slop=0.04
+        )
+        
+        self.image_sync.registerCallback(self._images_cb)
 
         self.create_subscription(
             CameraInfo,
@@ -88,10 +99,28 @@ class RealSenseDetection(Node):
                 f'RealSense intrinsics: fx={self.fx:.1f} '
                 f'cx={self.cx:.1f} cy={self.cy:.1f}')
 
-    def _depth_cb(self, msg):
-        with self._lock:
-            self.depth = self.bridge.imgmsg_to_cv2(msg, '16UC1')
+    def _images_cb(self, rgb_msg, depth_msg):
+        try:
+            depth = self.bridge.imgmsg_to_cv2(depth_msg, '16UC1')
+        except Exception as exc:
+            self.get_logger().warn(f'Could not convert depth image: {exc}')
+            return
 
+        with self._lock:
+            self.depth = depth
+
+        self._rgb_cb(rgb_msg)
+
+    def _get_depth(self, u, v):
+        with self._lock:
+            if self.depth is None:
+                return 0.0
+            h, w = self.depth.shape
+            u = max(0, min(u, w-1))
+            v = max(0, min(v, h-1))
+            patch = self.depth[
+                max(0,v-8):min(h,v+8),
+                max(0,u-8):min(w,u+8)]
     def _get_depth(self, u, v):
         with self._lock:
             if self.depth is None:
