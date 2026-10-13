@@ -7,7 +7,6 @@ the image frame_id. scene_graph_node converts them to base_link through TF
 (base_link -> global_camera_color_optical_frame, the easy_handeye2 result).
 """
 import os
-from jax import exc
 import rclpy, threading, json
 import message_filters
 from rclpy.qos import qos_profile_sensor_data
@@ -29,6 +28,7 @@ class RealSenseDetection(Node):
 
         self.bridge  = CvBridge()
         self.fx = self.fy = self.cx = self.cy = None
+        self.camera_info = None
         self.depth   = None
         self._lock   = threading.Lock()
         # Debug preview window needs a real X11/Wayland display -- fine with
@@ -36,16 +36,16 @@ class RealSenseDetection(Node):
         # running headless over SSH, which is how this node runs on REAL-1.
         self._has_display = bool(os.environ.get('DISPLAY'))
 
-        # YOLO
+        # define yolo parameter and load up the model
         #TO DO: update to the actualy model path
         self.declare_parameter('model_path', '')
         model_path = self.get_parameter('model_path').value
         if not YOLO_AVAILABLE:
             raise RuntimeError('YOLOv8 not available, please install ultralytics')
         if not os.path.isfile(model_path):
-            raise FileNotFoundError(f'YOLO model not found at {model.path}')
+            raise FileNotFoundError(f'YOLO model not found at {model_path}')
         self.model = YOLO(model_path)
-        self.logger.info(f'Loaded Yolo model from {model_path} with classes: {self.model_names}')
+        self.get_logger().info(f'Loaded Yolo model from {model_path} with classes: {self.model.names}')
 
         self.target_classes = ['fire-truck']
 
@@ -56,50 +56,67 @@ class RealSenseDetection(Node):
 
 
         # Subscriptions — use aligned depth (perfect alignment with RGB)
-        
-        self.rgb_sub = message_filters.Subscriber(
-            self,
-            Image,
-            self.get_parameter('rgb_topic').value,
-            qos_profile=qos_profile_sensor_data
-        )
-
-        self.depth_sub = message_filters.Subscriber(
-            self,
-            Image,
-            self.get_parameter('depth_topic').value,
-            qos_profile=qos_profile_sensor_data
-        )
-
-        self.image_sync = message_filters.ApproximateTimeSynchronizer(
-            [self.rgb_sub, self.depth_sub],
-            queue_size=5,
-            slop=0.04
-        )
-        
+        self.rgb_sub = message_filters.Subscriber(self, Image, self.get_parameter('rgb_topic').value, qos_profile=qos_profile_sensor_data)
+        self.depth_sub = message_filters.Subscriber(self, Image, self.get_parameter('depth_topic').value, qos_profile=qos_profile_sensor_data)
+        self.image_sync = message_filters.ApproximateTimeSynchronizer([self.rgb_sub, self.depth_sub], queue_size=5, slop=0.04)
         self.image_sync.registerCallback(self._images_cb)
-
-        self.create_subscription(
-            CameraInfo,
-            self.get_parameter('info_topic').value,
-            self._info_cb,
-            qos_profile_sensor_data
-        )
-
-        self.det_pub = self.create_publisher(String, '/detections_side', 10)
+       
+        self.create_subscription(CameraInfo, self.get_parameter('info_topic').value, self._info_cb, qos_profile_sensor_data)
+       
+        self.declare_parameter('output_topic', '/aloha/perception/detections')
+       
+        self.det_pub = self.create_publisher(String, self.get_parameter('output_topic').value, 10)
+       
         self.get_logger().info('RealSense detection node ready')
 
     def _info_cb(self, msg):
-        if self.fx is None:
-            self.fx = msg.k[0]
-            self.fy = msg.k[4]
-            self.cx = msg.k[2]
-            self.cy = msg.k[5]
-            self.get_logger().info(
-                f'RealSense intrinsics: fx={self.fx:.1f} '
-                f'cx={self.cx:.1f} cy={self.cy:.1f}')
+        fx = msg.k[0]
+        fy = msg.k[4]
+        cx = msg.k[2]
+        cy = msg.k[5]
 
+        if not np.isfinite([fx, fy, cx, cy]).all() or fx <= 0 or fy <= 0:
+            self.get_logger().warn(
+                'Received invalid camera parameters'
+            )
+            return
+
+        self.fx = fx
+        self.fy = fy
+        self.cx = cx
+        self.cy = cy
+        self.camera_info = msg
     def _images_cb(self, rgb_msg, depth_msg):
+        if self.camera_info is None:
+            return
+        
+        if (self.camera_info.header.frame_id != rgb_msg.header.frame_id) or (self.camera_info.width != rgb_msg.width) or (self.camera_info.height != rgb_msg.height):
+            self.get_logger().warn('Color Camera does not match color image')
+            return
+
+        if depth_msg.encoding != '16UC1':
+            self.get_logger().warn(
+                f'Expected 16UC1 depth, received {depth_msg.encoding}'
+            )
+            return
+
+        if (rgb_msg.width, rgb_msg.height) != (
+            depth_msg.width, depth_msg.height
+        ):
+            self.get_logger().warn(
+                'Color and aligned depth dimensions do not match'
+            )
+            return
+
+        if (
+            not rgb_msg.header.frame_id
+            or rgb_msg.header.frame_id != depth_msg.header.frame_id
+        ):
+            self.get_logger().warn(
+                'Color and aligned depth coordinate frames do not match'
+            )
+            return
+
         try:
             depth = self.bridge.imgmsg_to_cv2(depth_msg, '16UC1')
         except Exception as exc:
@@ -111,16 +128,6 @@ class RealSenseDetection(Node):
 
         self._rgb_cb(rgb_msg)
 
-    def _get_depth(self, u, v):
-        with self._lock:
-            if self.depth is None:
-                return 0.0
-            h, w = self.depth.shape
-            u = max(0, min(u, w-1))
-            v = max(0, min(v, h-1))
-            patch = self.depth[
-                max(0,v-8):min(h,v+8),
-                max(0,u-8):min(w,u+8)]
     def _get_depth(self, u, v):
         with self._lock:
             if self.depth is None:
@@ -190,7 +197,7 @@ class RealSenseDetection(Node):
 
         raw_detections = []
 
-        # YOLO detection
+        # yolo detection
         if self.model is not None:
             try:
                 results = self.model(bgr, verbose=False)
@@ -211,6 +218,7 @@ class RealSenseDetection(Node):
 
 
         if not raw_detections:
+            self.det_pub.publish(String(data='[]'))
             return
 
         detections = []
@@ -242,8 +250,7 @@ class RealSenseDetection(Node):
                 (u+8, v), cv2.FONT_HERSHEY_SIMPLEX,
                 0.5, (0,255,0), 2)
 
-        if detections:
-            self.det_pub.publish(String(data=json.dumps(detections)))
+        self.det_pub.publish(String(data=json.dumps(detections)))
 
         if self._has_display:
             cv2.imshow('RealSense Detection', display)
