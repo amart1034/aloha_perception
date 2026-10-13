@@ -225,9 +225,9 @@ install/
 log/
 
 # Model Weights and Recorded Data
-.pt
-.onnx
-.bag
-.db3
-.mcap
+*.pt
+*.onnx
+*.bag
+*.db3
+*.mcap
 
