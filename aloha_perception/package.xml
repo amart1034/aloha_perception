@@ -6,6 +6,12 @@
   <description>Object Detection and 3D Localization for ALOHA using RealSense cameras.</description>
   <maintainer email="amart1034@ucr.edu">lab</maintainer>
   <license>TODO: License declaration</license>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

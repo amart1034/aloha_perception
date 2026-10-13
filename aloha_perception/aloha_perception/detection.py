@@ -8,8 +8,8 @@ the image frame_id. scene_graph_node converts them to base_link through TF
 """
 import os
 import rclpy, threading, json
+from rclpy.qos import qos_profile_sensor_data
 from rclpy.node import Node
-from ament_index_python.packages import get_package_share_directory
 from sensor_msgs.msg import Image, CameraInfo
 from std_msgs.msg import String
 from cv_bridge import CvBridge
@@ -34,61 +34,49 @@ class RealSenseDetection(Node):
         # running headless over SSH, which is how this node runs on REAL-1.
         self._has_display = bool(os.environ.get('DISPLAY'))
 
-        # Blocked (no detections published) if camera_watchdog flagged this
-        # camera for recalibration after a drop/reconnect. See
-        # camera_watchdog.py / multi_camera_calibrate.py.
-        self._blocked = False
-        self.create_subscription(
-            String, '/camera_calibration_status', self._calibration_status_cb, 10)
-
         # YOLO
-        self.model = None
-        if YOLO_AVAILABLE:
-            default_model_path = os.path.join(
-                get_package_share_directory('thesis_robot'), 'models', 'yolov8m.pt')
-            self.declare_parameter('model_path', default_model_path)
-            model_path = self.get_parameter('model_path').value
-            try:
-                self.model = YOLO(model_path)
-                self.get_logger().info(f'YOLOv8m loaded')
-            except Exception as e:
-                self.get_logger().warn(f'YOLO failed: {e} — using color detection only')
+        #TO DO: update to the actualy model path
+        self.declare_parameter('model_path', '')
+        model_path = self.get_parameter('model_path').value
+        if not YOLO_AVAILABLE:
+            raise RuntimeError('YOLOv8 not available, please install ultralytics')
+        if not os.path.isfile(model_path):
+            raise FileNotFoundError(f'YOLO model not found at {model.path}')
+        self.model = YOLO(model_path)
+        self.logger.info(f'Loaded Yolo model from {model_path} with classes: {self.model_names}')
 
-        self.target_classes = [
-            'bottle', 'cup', 'bowl', 'cell phone',
-            'remote', 'book', 'scissors', 'vase', 'mouse'
-        ]
+        self.target_classes = ['fire-truck']
 
-        # Camera inputs: need to set these to the actual topics on the lab computer
-        # Subscriptions read from their topic names from settings
-        self.declare_parameter('rgb_topic', '/global_camera/color/image_raw')
-        self.declare_parameter('depth_topic', 'global_camera/aligned_depth_to_color/image_raw')
-        self.declare_parameter('info_topic', '/global_camera/color/camera_info')
+        # Receive color, depth aligned to color, and color-camera calibration info
+        self.declare_parameter('rgb_topic', '/cam_high/camera/color/image_raw')
+        self.declare_parameter('depth_topic', '/cam_high/camera/aligned_depth_to_color/image_raw')
+        self.declare_parameter('info_topic', '/cam_high/camera/color/camera_info')
 
 
         # Subscriptions — use aligned depth (perfect alignment with RGB)
         self.create_subscription(
-            Image, self.get_parameter('rgb_topic').value, self._rgb_cb, 10)
+            Image,
+            self.get_parameter('rgb_topic').value,
+            self._rgb_cb,
+            qos_profile_sensor_data
+        )
+
         self.create_subscription(
-            Image, self.get_parameter('depth_topic').value,
-            self._depth_cb, 10)
+            Image,
+            self.get_parameter('depth_topic').value,
+            self._depth_cb,
+            qos_profile_sensor_data
+        )
+
         self.create_subscription(
-            CameraInfo, self.get_parameter('info_topic').value, self._info_cb, 10)
+            CameraInfo,
+            self.get_parameter('info_topic').value,
+            self._info_cb,
+            qos_profile_sensor_data
+        )
 
         self.det_pub = self.create_publisher(String, '/detections_side', 10)
         self.get_logger().info('RealSense detection node ready')
-
-    def _calibration_status_cb(self, msg):
-        try:
-            status = json.loads(msg.data).get('realsense', 'ok')
-        except (json.JSONDecodeError, AttributeError):
-            return
-        newly_blocked = status != 'ok'
-        if newly_blocked and not self._blocked:
-            self.get_logger().warn(
-                'realsense flagged for recalibration — blocking detections '
-                'until calibration/multi_camera_calibrate.py is rerun.')
-        self._blocked = newly_blocked
 
     def _info_cb(self, msg):
         if self.fx is None:
@@ -162,7 +150,7 @@ class RealSenseDetection(Node):
         return detections
 
     def _rgb_cb(self, msg):
-        if self._blocked or self.fx is None:
+        if self.fx is None:
             return
 
         try:
@@ -192,9 +180,6 @@ class RealSenseDetection(Node):
             except Exception as e:
                 self.get_logger().warn(f'YOLO error: {e}')
 
-        # Color fallback if YOLO found nothing
-        if not raw_detections:
-            raw_detections = self._color_detect(bgr)
 
         if not raw_detections:
             return

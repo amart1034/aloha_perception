@@ -23,7 +23,8 @@ setup(
         ],
     },
     entry_points={
-        'console_scripts': [
+    'console_scripts': [
+        'detector = aloha_perception.detection:main',
         ],
     },
 )
