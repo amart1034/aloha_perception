@@ -47,7 +47,7 @@ class RealSenseDetection(Node):
         self.model = YOLO(model_path)
         self.get_logger().info(f'Loaded Yolo model from {model_path} with classes: {self.model.names}')
 
-        self.target_classes = ['truck']
+        self.target_classes = ['fire-truck']
 
         # Receive color, depth aligned to color, and color-camera calibration info
         self.declare_parameter('rgb_topic', '/cam_high/camera/color/image_raw')
