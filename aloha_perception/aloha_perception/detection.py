@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """
-RealSense D435I object detection node.
-Uses YOLOv8m + HSV color fallback.
-Publishes to /detections_side: camera-frame coords (cx_3d/cy_3d/cz_3d) plus
-the image frame_id. scene_graph_node converts them to base_link through TF
-(base_link -> global_camera_color_optical_frame, the easy_handeye2 result).
+ALOHA overhead-camera object detector
+Uses a supplied YOLO model and aligned RealSense Depth
+Publishes labeled camera-relative XYZ coordinates in meters.
 """
 import os
 import rclpy, threading, json
@@ -28,60 +26,40 @@ class RealSenseDetection(Node):
 
         self.bridge  = CvBridge()
         self.fx = self.fy = self.cx = self.cy = None
-        self.depth   = None
-        self._lock   = threading.Lock()
+        self.camera_info = None
+        self.depth = None
+        self._lock = threading.Lock()
         # Debug preview window needs a real X11/Wayland display -- fine with
         # someone logged into the GUI session, fatal (Qt xcb plugin abort)
         # running headless over SSH, which is how this node runs on REAL-1.
         self._has_display = bool(os.environ.get('DISPLAY'))
 
-        # Blocked (no detections published) if camera_watchdog flagged this
-        # camera for recalibration after a drop/reconnect. See
-        # camera_watchdog.py / multi_camera_calibrate.py.
-        self._blocked = False
-        self.create_subscription(String, '/camera_calibration_status', self._calibration_status_cb, 10)
-
         # YOLO
-        self.model = None
-        if YOLO_AVAILABLE:
-            # Check if package exists, fallback to home cache or local filename
-            try:
-                pkg_share = get_package_share_directory('aloha_perception')
-                default_model_path = os.path.join(pkg_share, 'models', 'yolov8m.pt')
-            except Exception:
-                default_model_path = os.path.expanduser('~/.cache/ultralytics/yolov8m.pt')
+        if not YOLO_AVAILABLE:
+            raise RuntimeError("Ultralytics not available.")
 
-            self.declare_parameter('model_path', default_model_path)
-            model_path = self.get_parameter('model_path').value
+        self.model = YOLO('yolov8s.pt')
+        self.get_logger().info(f"Loaded pretrained YOLOv8s with classes: {self.model.names}")
 
-            try:
-                # If the specified path does not exist on disk, fall back to the bare filename.
-                # Ultralytics YOLO('yolov8m.pt') downloads official weights automatically.
-                if not os.path.isfile(model_path):
-                    self.get_logger().info(f'Weights not found at "{model_path}". Downloading yolov8m.pt automatically...')
-                    self.model = YOLO('yolov8m.pt')
-                else:
-                    self.model = YOLO(model_path)
+        self.target_classes = ['truck']
 
-                self.get_logger().info('YOLOv8m loaded successfully')
-            except Exception as e:
-                self.get_logger().warn(f'YOLO loading failed: {e} — falling back to color/fallback detection')
+        # self.target_classes = ['fire-truck', 'screwdriver', 'cell-phone']
 
-        self.target_classes = [
-            'truck', 'bottle', 'cup', 'bowl', 'cell phone',
-            'remote', 'book', 'scissors', 'vase', 'mouse'
-        ]
+        # Subscriptions
+        self.declare_parameter('rgb_topic', '/cam_high/camera/color/image_raw')
+        self.declare_parameter('depth_topic', '/cam_high/camera/aligned_depth_to_color/image_raw')
+        self.declare_parameter('info_topic', '/cam_high/camera/color/camera_info')
 
-        # Subscriptions — use aligned depth (perfect alignment with RGB)
-        self.create_subscription(
-            Image, '/global_camera/global_camera/color/image_raw', self._rgb_cb, 10)
-        self.create_subscription(
-            Image, '/global_camera/global_camera/aligned_depth_to_color/image_raw',
-            self._depth_cb, 10)
-        self.create_subscription(
-            CameraInfo, '/global_camera/global_camera/color/camera_info', self._info_cb, 10)
+        self.rgb_sub = message_filters.Subscriber(self, Image, self.get_parameter('rgb_topic').value, qos_profile=qos_profile_sensor_data)
+        self.depth_sub = message_filters.Subscriber(self, Image, self.get_parameter('depth_topic').value, qos_profile=qos_profile_sensor_data)
+        self.image_sync = message_filters.ApproximateTimeSynchronizer([self.rgb_sub, self.depth_sub], queue_size=5, slop=0.04)
 
-        self.det_pub = self.create_publisher(String, '/detections_side', 10)
+        self.image_sync.registerCallback(self._images_cb)
+
+        self.create_subscription(CameraInfo, self.get_parameter('info_topic').value, self._info_cb, qos_profile_sensor_data)
+
+        self.declare_parameter('output_topic', '/aloha/perception/detections')
+        self.det_pub = self.create_publisher(String, self.get_parameter('output_topic').value, 10)
         self.get_logger().info('RealSense detection node ready')
 
     def _info_cb(self, msg):
@@ -166,40 +144,6 @@ class RealSenseDetection(Node):
         cz3 = depth_m
         return cx3, cy3, cz3
 
-    def _color_detect(self, bgr):
-        """HSV color fallback detection."""
-        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-        detections = []
-        color_ranges = {
-            'red_obj':    [(0,120,70),(10,255,255),(170,120,70),(180,255,255)],
-            'blue_obj':   [(100,100,70),(130,255,255),None,None],
-            'green_obj':  [(40,100,70),(80,255,255),None,None],
-            'yellow_obj': [(20,100,70),(35,255,255),None,None],
-        }
-        for name, (lo1,hi1,lo2,hi2) in color_ranges.items():
-            m1 = cv2.inRange(hsv, np.array(lo1), np.array(hi1))
-            if lo2:
-                m2 = cv2.inRange(hsv, np.array(lo2), np.array(hi2))
-                mask = cv2.bitwise_or(m1, m2)
-            else:
-                mask = m1
-            k = np.ones((7,7), np.uint8)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k)
-            cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if not cnts:
-                continue
-            c = max(cnts, key=cv2.contourArea)
-            if cv2.contourArea(c) < 500:
-                continue
-            M = cv2.moments(c)
-            if M['m00'] == 0:
-                continue
-            u = int(M['m10']/M['m00'])
-            v = int(M['m01']/M['m00'])
-            detections.append((name, 0.75, u, v))
-        return detections
-
     def _rgb_cb(self, msg):
         if self.fx is None:
             return
@@ -234,6 +178,10 @@ class RealSenseDetection(Node):
 
         if not raw_detections:
             self.det_pub.publish(String(data='[]'))
+
+            if self._has_display:
+                cv2.imshow('RealSense Detector', bgr)
+                cv2.waitKey(1)
             return
 
         detections = []
