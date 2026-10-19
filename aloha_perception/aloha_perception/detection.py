@@ -28,7 +28,6 @@ class RealSenseDetection(Node):
 
         self.bridge  = CvBridge()
         self.fx = self.fy = self.cx = self.cy = None
-        self.camera_info = None
         self.depth   = None
         self._lock   = threading.Lock()
         # Debug preview window needs a real X11/Wayland display -- fine with
@@ -36,37 +35,41 @@ class RealSenseDetection(Node):
         # running headless over SSH, which is how this node runs on REAL-1.
         self._has_display = bool(os.environ.get('DISPLAY'))
 
-        # define yolo parameter and load up the model
-        #TO DO: update to the actualy model path
-        self.declare_parameter('model_path', '')
-        model_path = self.get_parameter('model_path').value
-        if not YOLO_AVAILABLE:
-            raise RuntimeError('YOLOv8 not available, please install ultralytics')
-        if not os.path.isfile(model_path):
-            raise FileNotFoundError(f'YOLO model not found at {model_path}')
-        self.model = YOLO(model_path)
-        self.get_logger().info(f'Loaded Yolo model from {model_path} with classes: {self.model.names}')
+        # Blocked (no detections published) if camera_watchdog flagged this
+        # camera for recalibration after a drop/reconnect. See
+        # camera_watchdog.py / multi_camera_calibrate.py.
+        self._blocked = False
+        self.create_subscription(
+            String, '/camera_calibration_status', self._calibration_status_cb, 10)
 
-        self.target_classes = ['truck']
+        # YOLO
+        self.model = None
+        if YOLO_AVAILABLE:
+            default_model_path = os.path.join(
+                get_package_share_directory('thesis_robot'), 'models', 'yolov8m.pt')
+            self.declare_parameter('model_path', default_model_path)
+            model_path = self.get_parameter('model_path').value
+            try:
+                self.model = YOLO(model_path)
+                self.get_logger().info(f'YOLOv8m loaded')
+            except Exception as e:
+                self.get_logger().warn(f'YOLO failed: {e} — using color detection only')
 
-        # Receive color, depth aligned to color, and color-camera calibration info
-        self.declare_parameter('rgb_topic', '/cam_high/camera/color/image_raw')
-        self.declare_parameter('depth_topic', '/cam_high/camera/aligned_depth_to_color/image_raw')
-        self.declare_parameter('info_topic', '/cam_high/camera/color/camera_info')
-
+        self.target_classes = [
+            'bottle', 'cup', 'bowl', 'cell phone',
+            'remote', 'book', 'scissors', 'vase', 'mouse'
+        ]
 
         # Subscriptions — use aligned depth (perfect alignment with RGB)
-        self.rgb_sub = message_filters.Subscriber(self, Image, self.get_parameter('rgb_topic').value, qos_profile=qos_profile_sensor_data)
-        self.depth_sub = message_filters.Subscriber(self, Image, self.get_parameter('depth_topic').value, qos_profile=qos_profile_sensor_data)
-        self.image_sync = message_filters.ApproximateTimeSynchronizer([self.rgb_sub, self.depth_sub], queue_size=5, slop=0.04)
-        self.image_sync.registerCallback(self._images_cb)
-       
-        self.create_subscription(CameraInfo, self.get_parameter('info_topic').value, self._info_cb, qos_profile_sensor_data)
-       
-        self.declare_parameter('output_topic', '/aloha/perception/detections')
-       
-        self.det_pub = self.create_publisher(String, self.get_parameter('output_topic').value, 10)
-       
+        self.create_subscription(
+            Image, '/global_camera/global_camera/color/image_raw', self._rgb_cb, 10)
+        self.create_subscription(
+            Image, '/global_camera/global_camera/aligned_depth_to_color/image_raw',
+            self._depth_cb, 10)
+        self.create_subscription(
+            CameraInfo, '/global_camera/global_camera/color/camera_info', self._info_cb, 10)
+
+        self.det_pub = self.create_publisher(String, '/detections_side', 10)
         self.get_logger().info('RealSense detection node ready')
 
     def _info_cb(self, msg):
