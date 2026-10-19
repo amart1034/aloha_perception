@@ -24,7 +24,7 @@ except:
 
 class RealSenseDetection(Node):
     def __init__(self):
-        super().__init__('realsense_detection')
+        super().__init__('detector')
 
         self.bridge  = CvBridge()
         self.fx = self.fy = self.cx = self.cy = None
@@ -39,33 +39,36 @@ class RealSenseDetection(Node):
         # camera for recalibration after a drop/reconnect. See
         # camera_watchdog.py / multi_camera_calibrate.py.
         self._blocked = False
-        self.create_subscription(
-            String, '/camera_calibration_status', self._calibration_status_cb, 10)
+        self.create_subscription(String, '/camera_calibration_status', self._calibration_status_cb, 10)
 
-<<<<<<< HEAD
         # YOLO
         self.model = None
         if YOLO_AVAILABLE:
-            default_model_path = os.path.join(
-                get_package_share_directory('thesis_robot'), 'models', 'yolov8m.pt')
+            # Check if package exists, fallback to home cache or local filename
+            try:
+                pkg_share = get_package_share_directory('aloha_perception')
+                default_model_path = os.path.join(pkg_share, 'models', 'yolov8m.pt')
+            except Exception:
+                default_model_path = os.path.expanduser('~/.cache/ultralytics/yolov8m.pt')
+
             self.declare_parameter('model_path', default_model_path)
             model_path = self.get_parameter('model_path').value
-            try:
-                self.model = YOLO(model_path)
-                self.get_logger().info(f'YOLOv8m loaded')
-            except Exception as e:
-                self.get_logger().warn(f'YOLO failed: {e} — using color detection only')
-=======
-        self.target_classes = ['fire-truck']
 
-        # Receive color, depth aligned to color, and color-camera calibration info
-        self.declare_parameter('rgb_topic', '/cam_high/camera/color/image_raw')
-        self.declare_parameter('depth_topic', '/cam_high/camera/aligned_depth_to_color/image_raw')
-        self.declare_parameter('info_topic', '/cam_high/camera/color/camera_info')
->>>>>>> 4e0c7c8621593d26f729da152ce703af3bb15998
+            try:
+                # If the specified path does not exist on disk, fall back to the bare filename.
+                # Ultralytics YOLO('yolov8m.pt') downloads official weights automatically.
+                if not os.path.isfile(model_path):
+                    self.get_logger().info(f'Weights not found at "{model_path}". Downloading yolov8m.pt automatically...')
+                    self.model = YOLO('yolov8m.pt')
+                else:
+                    self.model = YOLO(model_path)
+
+                self.get_logger().info('YOLOv8m loaded successfully')
+            except Exception as e:
+                self.get_logger().warn(f'YOLO loading failed: {e} — falling back to color/fallback detection')
 
         self.target_classes = [
-            'bottle', 'cup', 'bowl', 'cell phone',
+            'truck', 'bottle', 'cup', 'bowl', 'cell phone',
             'remote', 'book', 'scissors', 'vase', 'mouse'
         ]
 
