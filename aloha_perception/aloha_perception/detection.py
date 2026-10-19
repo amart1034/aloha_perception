@@ -42,6 +42,7 @@ class RealSenseDetection(Node):
         self.create_subscription(
             String, '/camera_calibration_status', self._calibration_status_cb, 10)
 
+<<<<<<< HEAD
         # YOLO
         self.model = None
         if YOLO_AVAILABLE:
@@ -54,6 +55,14 @@ class RealSenseDetection(Node):
                 self.get_logger().info(f'YOLOv8m loaded')
             except Exception as e:
                 self.get_logger().warn(f'YOLO failed: {e} — using color detection only')
+=======
+        self.target_classes = ['fire-truck']
+
+        # Receive color, depth aligned to color, and color-camera calibration info
+        self.declare_parameter('rgb_topic', '/cam_high/camera/color/image_raw')
+        self.declare_parameter('depth_topic', '/cam_high/camera/aligned_depth_to_color/image_raw')
+        self.declare_parameter('info_topic', '/cam_high/camera/color/camera_info')
+>>>>>>> 4e0c7c8621593d26f729da152ce703af3bb15998
 
         self.target_classes = [
             'bottle', 'cup', 'bowl', 'cell phone',
