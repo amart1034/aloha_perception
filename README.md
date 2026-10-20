@@ -53,8 +53,7 @@ The pipeline has produced detections and opened an OpenCV viewer using:
 | Middleware | ROS 2 Humble |
 | Camera | Intel RealSense D435i, color and aligned depth |
 | Model | Standard pretrained YOLOv8s (`yolov8s.pt`) |
-| Target class | `truck` |
-| Output | Camera-relative XYZ published as JSON inside a ROS text message |
+| Output | Camera-relative Z published as JSON inside a ROS text message |
 
 The OpenCV viewer has exhibited freezing and repeated reopening. The instructions below include a temporary way to disable that viewer while inspecting detection output.
 
