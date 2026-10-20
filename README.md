@@ -34,7 +34,7 @@ The long-term goal is to provide reliable object information to the motion-plann
 
 ## Overview
 
-This package runs an object detector on an overhead Intel RealSense camera, combines the detections with aligned depth, and publishes camera-relative XYZ positions as JSON inside a ROS 2 text message.
+This package runs an object detector on an overhead Intel RealSense camera, combines the detections with aligned depth, and publishes camera-relative Z positions as JSON inside a ROS 2 text message.
 
 The first milestone is to use the overhead camera to:
 
