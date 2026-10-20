@@ -38,11 +38,9 @@ This package runs an object detector on an overhead Intel RealSense camera, comb
 
 The first milestone is to use the overhead camera to:
 
-1. Identify a target object, initially a toy fire truck.
-2. Estimate its XYZ position using aligned depth.
+1. Identify a target object.
+2. Estimate its Z position using aligned depth.
 3. Validate the position against physical measurements.
-
-The standard pretrained model identifies the target as `truck`, rather than a separate fire-truck category. Recognition of the toy is not guaranteed in every view.
 
 Camera-to-robot calibration is the next milestone. **Camera-relative coordinates must not be treated as robot coordinates.**
 
