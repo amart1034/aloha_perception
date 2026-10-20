@@ -2,7 +2,7 @@
 
 Object detection, 3D localization, and camera-to-robot calibration for the ALOHA robotics system.
 
-The long-term goal is to provide reliable object information to the motion-planning system for autonomous picking and other actions.
+The long-term goal is to provide reliable object information to the motion-planning system for autonomous action.
 
 > **Safety notice:** This detector does **not** command arm movement. However, some steps below start real ALOHA hardware, which may enable motors. Follow your lab's power-on and shutdown procedures, keep the workspace clear, and keep the emergency stop accessible.
 
@@ -36,13 +36,13 @@ The long-term goal is to provide reliable object information to the motion-plann
 
 This package runs an object detector on an overhead Intel RealSense camera, combines the detections with aligned depth, and publishes camera-relative Z positions as JSON inside a ROS 2 text message.
 
-The first milestone is to use the overhead camera to:
+Currently, the perception pipeline is capable of:
 
-1. Identify a target object.
+1. Identifying a target object.
 2. Estimate its Z position using aligned depth.
 3. Validate the position against physical measurements.
 
-Camera-to-robot calibration is the next milestone. **Camera-relative coordinates must not be treated as robot coordinates.**
+Establishing an accurate XYZ coordinate system across all robot cameras, with camera fusion, is the next milestone.
 
 ## Current status
 
@@ -337,7 +337,7 @@ Loaded pretrained YOLOv8s ...
 RealSense detection node ready
 ```
 
-Leave the detector running and place the toy truck within the camera's view.
+Leave the detector running and place target within the camera's view.
 
 #### Option B: run with the current OpenCV viewer
 
@@ -436,7 +436,7 @@ These values are examples, not measured results. The actual frame name comes fro
 
 ### Interpreting the output
 
-- **A populated list** means an accepted detection produced usable XYZ.
+- **A populated list** means an accepted detection produced usable Z.
 - **`[]`** means the processed frame produced no accepted object with usable depth.
 - **No messages** may indicate missing camera inputs, synchronization problems, or processing errors. Inspect both the camera and detector terminals.
 
@@ -505,7 +505,7 @@ Confirm aligned depth is enabled and publishing before starting detection.
 Ensure this assignment exists inside `__init__`:
 
 ```python
-self.target_classes = ['truck']
+self.target_classes = ['target_name']
 ```
 
 Save, rebuild, load the workspace, and restart the detector.
@@ -518,8 +518,6 @@ Possible causes include:
 - The target-class spelling does not match the model.
 - Detection confidence is below the code's threshold.
 - Depth near the detection center is missing or rejected.
-
-Standard pretrained YOLO uses `truck`. The lab's custom model previously used `fire-truck`; these labels are not interchangeable.
 
 ### Detector loads an unexpected model or old code
 
@@ -556,7 +554,6 @@ Use the documented arrangement:
 
 ## Known limitations
 
-- Coordinate accuracy has not yet been measured.
 - Camera-to-robot calibration is not completed.
 - The current test uses one camera.
 - Multi-camera tracking and autonomous picking are future work.
@@ -564,19 +561,14 @@ Use the documented arrangement:
 - Object location alone does not specify grasp orientation or approach.
 - Downstream robot control will need a policy for invalid, missing, and outdated observations.
 
-## Roadmap
+## Currently in Development
 
-- [ ] Validate coordinate accuracy against physical measurements.
-- [ ] Calibrate the overhead camera relative to the robot.
-- [ ] Add calibrated wrist-camera observations.
-- [ ] Combine observations from multiple cameras.
+- [ ] Define an XYZ coordinate system that the system can work with.
+- [ ] Camera fusion across both wrist cameras and overhead camera.
 - [ ] Track objects across camera views.
 - [ ] Provide perception outputs to the motion-planning system.
-- [ ] Improve visualization and handle missing or outdated observations.
 
 ## References
 
-- Original ALOHA perception repository
-- Lab ALOHA perception repository
-- Kinova reference implementation
-- ALOHA MoveIt reference
+- Kinova reference implementation [https://github.com/Shashy2305/KinovaARM]
+- ALOHA MoveIt reference [https://github.com/VigneshT24/real-aloha-moveit-sim]
